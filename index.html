@@ -1,156 +1,275 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Voxel World – Foundation</title>
+  <title>Voxel Survival Prototype - Phase 4</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { margin: 0; overflow: hidden; background: black; }
+    body { margin:0; overflow:hidden; background:#87ceeb; }
     #ui {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      color: white;
-      font-family: Arial;
-      background: rgba(0,0,0,0.4);
-      padding: 10px;
-      border-radius: 6px;
-      z-index: 10;
+      position:absolute; top:10px; left:10px; color:white;
+      font-family:Arial; background:rgba(0,0,0,0.4);
+      padding:10px; border-radius:6px; z-index:10;
     }
   </style>
 </head>
-
 <body>
 <div id="ui">
-  🧱 Voxel World (Foundation)<br>
-  Move: WASD / Arrows<br>
-  Jump: Space<br>
-  Click: Break | Right Click: Place
+  🧱 Voxel Survival Prototype Phase 4<br>
+  Move: WASD / Arrows | Jump: Space<br>
+  Click: Break | Right Click: Place | Mouse Look
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
-
 <script>
 /* =========================
-   BASIC ENGINE SETUP
+   BASIC SETUP
 ========================= */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 
 const camera = new THREE.PerspectiveCamera(
-  75, window.innerWidth / window.innerHeight, 0.1, 1000
+  75, window.innerWidth/window.innerHeight, 0.1, 1000
 );
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 /* =========================
    LIGHTING
 ========================= */
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const sun = new THREE.DirectionalLight(0xffffff, 1);
-sun.position.set(50, 100, 50);
+scene.add(new THREE.AmbientLight(0xffffff,0.5));
+const sun = new THREE.DirectionalLight(0xffffff,1);
+sun.position.set(50,100,50);
 scene.add(sun);
+
+/* =========================
+   BLOCKS & MATERIALS
+========================= */
+const BLOCK_SIZE = 1;
+const geo = new THREE.BoxGeometry(1,1,1);
+const materials = {
+  grass: new THREE.MeshStandardMaterial({color:0x55aa55}),
+  dirt:  new THREE.MeshStandardMaterial({color:0x8b5a2b}),
+  stone: new THREE.MeshStandardMaterial({color:0x888888}),
+  wood:  new THREE.MeshStandardMaterial({color:0x8b4513}),
+  leaves:new THREE.MeshStandardMaterial({color:0x228b22})
+};
 
 /* =========================
    PLAYER
 ========================= */
 const player = {
-  pos: new THREE.Vector3(8, 10, 8),
-  vel: new THREE.Vector3(),
-  speed: 0.15,
-  jumping: false
+  pos:new THREE.Vector3(8,10,8),
+  vel:new THREE.Vector3(),
+  speed:0.15,
+  jumping:false,
+  yaw:0,   // horizontal rotation
+  pitch:0  // vertical rotation
 };
 
 /* =========================
    CAMERA
 ========================= */
-camera.position.set(8, 14, 18);
-
-/* =========================
-   BLOCK SYSTEM
-========================= */
-const BLOCK_SIZE = 1;
-const blocks = [];
-
-const geo = new THREE.BoxGeometry(1,1,1);
-const materials = {
-  grass: new THREE.MeshStandardMaterial({ color: 0x55aa55 }),
-  dirt:  new THREE.MeshStandardMaterial({ color: 0x8b5a2b }),
-  stone: new THREE.MeshStandardMaterial({ color: 0x888888 })
-};
-
-/* =========================
-   SIMPLE NOISE (terrain)
-========================= */
-function heightNoise(x, z) {
-  return Math.floor(
-    Math.sin(x * 0.3) * 2 +
-    Math.cos(z * 0.3) * 2 + 4
-  );
-}
-
-/* =========================
-   GENERATE WORLD (CHUNK)
-========================= */
-const WORLD_SIZE = 16;
-
-for (let x = 0; x < WORLD_SIZE; x++) {
-  for (let z = 0; z < WORLD_SIZE; z++) {
-
-    const height = heightNoise(x, z);
-
-    for (let y = 0; y <= height; y++) {
-      let mat = materials.stone;
-      if (y === height) mat = materials.grass;
-      else if (y > height - 2) mat = materials.dirt;
-
-      const block = new THREE.Mesh(geo, mat);
-      block.position.set(x, y, z);
-      scene.add(block);
-      blocks.push(block);
-    }
-  }
-}
+camera.position.set(8,14,18);
 
 /* =========================
    CONTROLS
 ========================= */
 const keys = {};
-document.addEventListener("keydown", e => keys[e.code] = true);
-document.addEventListener("keyup", e => keys[e.code] = false);
+document.addEventListener("keydown", e=>keys[e.code]=true);
+document.addEventListener("keyup", e=>keys[e.code]=false);
+
+// Mouse look
+let isPointerLocked = false;
+document.body.addEventListener("click", ()=>document.body.requestPointerLock());
+document.addEventListener("pointerlockchange",()=>{isPointerLocked=document.pointerLockElement===document.body;});
+
+document.addEventListener("mousemove", e=>{
+  if(!isPointerLocked) return;
+  const sensitivity = 0.002;
+  player.yaw -= e.movementX * sensitivity;
+  player.pitch -= e.movementY * sensitivity;
+  player.pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.pitch));
+});
 
 /* =========================
-   RAYCAST (BREAK / PLACE)
+   NOISE FUNCTIONS
+========================= */
+function noise(x,z){ return Math.floor(Math.sin(x*0.3)*2 + Math.cos(z*0.3)*2 +4); }
+function noise3D(x,y,z){ return Math.sin(x*0.2)*Math.cos(y*0.2)*Math.sin(z*0.2); }
+function riverNoise(x,z){ return Math.sin(x*0.05)+Math.cos(z*0.05); }
+
+/* =========================
+   CHUNK SYSTEM
+========================= */
+const CHUNK_SIZE = 16;
+const VIEW_DISTANCE = 2;
+let chunks = {};
+let blocks = [];
+
+function generateChunk(cx, cz){
+  const chunkBlocks = [];
+  for(let x=0;x<CHUNK_SIZE;x++){
+    for(let z=0;z<CHUNK_SIZE;z++){
+      const worldX = cx*CHUNK_SIZE + x;
+      const worldZ = cz*CHUNK_SIZE + z;
+
+      const height = noise(worldX, worldZ);
+
+      // river carving
+      const river = riverNoise(worldX, worldZ);
+      let riverDepth = 0;
+      if(river>0.9 && river<1.1) riverDepth=2;
+
+      // generate terrain blocks
+      for(let y=0;y<=height;y++){
+        // caves
+        const cave = noise3D(worldX,y,worldZ);
+        if(cave>0.5) continue;
+        // river
+        if(y <= height && y>height-riverDepth) continue;
+
+        let mat = materials.stone;
+        if(y===height) mat=materials.grass;
+        else if(y>height-2) mat=materials.dirt;
+
+        const block = new THREE.Mesh(geo, mat);
+        block.position.set(worldX,y,worldZ);
+        scene.add(block);
+        chunkBlocks.push(block);
+        blocks.push(block);
+      }
+
+      // Tree generation
+      if(Math.random()<0.05){ // 5% chance per x,z column
+        const trunkHeight = 4 + Math.floor(Math.random()*2);
+        for(let ty=height+1; ty<=height+trunkHeight; ty++){
+          const wood = new THREE.Mesh(geo, materials.wood);
+          wood.position.set(worldX,ty,worldZ);
+          scene.add(wood);
+          chunkBlocks.push(wood);
+          blocks.push(wood);
+        }
+        const leafStart = height + trunkHeight - 1;
+        for(let lx=-1; lx<=1; lx++){
+          for(let lz=-1; lz<=1; lz++){
+            for(let ly=0; ly<=1; ly++){
+              const leaf = new THREE.Mesh(geo, materials.leaves);
+              leaf.position.set(worldX+lx, leafStart+ly, worldZ+lz);
+              scene.add(leaf);
+              chunkBlocks.push(leaf);
+              blocks.push(leaf);
+            }
+          }
+        }
+      }
+    }
+  }
+  return chunkBlocks;
+}
+
+function updateChunks(){
+  const playerChunkX = Math.floor(player.pos.x / CHUNK_SIZE);
+  const playerChunkZ = Math.floor(player.pos.z / CHUNK_SIZE);
+
+  for(let dx=-VIEW_DISTANCE;dx<=VIEW_DISTANCE;dx++){
+    for(let dz=-VIEW_DISTANCE;dz<=VIEW_DISTANCE;dz++){
+      const key = (playerChunkX+dx)+","+(playerChunkZ+dz);
+      if(!chunks[key]){
+        chunks[key] = generateChunk(playerChunkX+dx, playerChunkZ+dz);
+      }
+    }
+  }
+}
+
+/* =========================
+   PLAYER PHYSICS
+========================= */
+const GRAVITY=-0.02;
+
+function getBlockBelowPlayer(){
+  let maxY=-Infinity;
+  blocks.forEach(b=>{
+    if(player.pos.x+0.5 > b.position.x && player.pos.x-0.5 < b.position.x+1 &&
+       player.pos.z+0.5 > b.position.z && player.pos.z-0.5 < b.position.z+1){
+      if(b.position.y>maxY) maxY=b.position.y;
+    }
+  });
+  return maxY;
+}
+
+function updatePlayer(){
+  // movement
+  let forward = new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw));
+  let right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));
+
+  if(keys["KeyW"]||keys["ArrowUp"]) player.pos.add(forward.clone().multiplyScalar(player.speed));
+  if(keys["KeyS"]||keys["ArrowDown"]) player.pos.add(forward.clone().multiplyScalar(-player.speed));
+  if(keys["KeyA"]||keys["ArrowLeft"]) player.pos.add(right.clone().multiplyScalar(-player.speed));
+  if(keys["KeyD"]||keys["ArrowRight"]) player.pos.add(right.clone().multiplyScalar(player.speed));
+
+  // gravity
+  player.vel.y += GRAVITY;
+  player.pos.y += player.vel.y;
+
+  const groundY = getBlockBelowPlayer() + 1;
+  if(player.pos.y < groundY){
+    player.pos.y = groundY;
+    player.vel.y = 0;
+    player.jumping = false;
+  }
+
+  // jump
+  if(keys["Space"] && !player.jumping){
+    player.vel.y = 0.25;
+    player.jumping = true;
+  }
+
+  // camera follows mouse
+  const camX = player.pos.x + Math.sin(player.yaw)*10;
+  const camY = player.pos.y + 6 + Math.sin(player.pitch)*2;
+  const camZ = player.pos.z + Math.cos(player.yaw)*10;
+  camera.position.lerp(new THREE.Vector3(camX, camY, camZ),0.1);
+  const lookPoint = new THREE.Vector3(
+    player.pos.x + Math.sin(player.yaw),
+    player.pos.y + Math.sin(player.pitch),
+    player.pos.z + Math.cos(player.yaw)
+  );
+  camera.lookAt(lookPoint);
+
+  updateChunks();
+}
+
+/* =========================
+   RAYCAST (BREAK/PLACE)
 ========================= */
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
-function castRay(event) {
-  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-  raycaster.setFromCamera(mouse, camera);
+function castRay(event){
+  mouse.x = (event.clientX/window.innerWidth)*2-1;
+  mouse.y = -(event.clientY/window.innerHeight)*2+1;
+  raycaster.setFromCamera(mouse,camera);
   return raycaster.intersectObjects(blocks);
 }
 
-/* BREAK */
-window.addEventListener("click", e => {
-  const hit = castRay(e);
-  if (hit.length) {
-    const b = hit[0].object;
+// break
+window.addEventListener("click",e=>{
+  const hit=castRay(e);
+  if(hit.length){
+    const b=hit[0].object;
     scene.remove(b);
-    blocks.splice(blocks.indexOf(b), 1);
+    blocks.splice(blocks.indexOf(b),1);
   }
 });
 
-/* PLACE */
-window.addEventListener("contextmenu", e => {
+// place
+window.addEventListener("contextmenu",e=>{
   e.preventDefault();
-  const hit = castRay(e);
-  if (hit.length) {
-    const b = new THREE.Mesh(geo, materials.dirt);
-    b.position.copy(hit[0].object.position)
-      .add(hit[0].face.normal);
+  const hit=castRay(e);
+  if(hit.length){
+    const b=new THREE.Mesh(geo,materials.dirt);
+    b.position.copy(hit[0].object.position).add(hit[0].face.normal);
     scene.add(b);
     blocks.push(b);
   }
@@ -159,103 +278,13 @@ window.addEventListener("contextmenu", e => {
 /* =========================
    GAME LOOP
 ========================= */
-function animate() {
+function animate(){
   requestAnimationFrame(animate);
-
-  /* Movement */
-  if (keys["KeyW"] || keys["ArrowUp"])    player.pos.z -= player.speed;
-  if (keys["KeyS"] || keys["ArrowDown"])  player.pos.z += player.speed;
-  if (keys["KeyA"] || keys["ArrowLeft"])  player.pos.x -= player.speed;
-  if (keys["KeyD"] || keys["ArrowRight"]) player.pos.x += player.speed;
-
-  /* Jump */
-  if (keys["Space"] && !player.jumping) {
-    player.vel.y = 0.25;
-    player.jumping = true;
-  }
-
-  /* Gravity */
-  player.vel.y -= 0.01;
-  player.pos.add(player.vel);
-
-  if (player.pos.y <= 6) {
-    player.pos.y = 6;
-    player.vel.y = 0;
-    player.jumping = false;
-  }
-
-  /* Camera follow */
-  camera.position.lerp(
-    new THREE.Vector3(
-      player.pos.x,
-      player.pos.y + 6,
-      player.pos.z + 10
-    ), 0.1
-  );
-  camera.lookAt(player.pos);
-
-  renderer.render(scene, camera);
+  updatePlayer();
+  renderer.render(scene,camera);
 }
-
 animate();
 </script>
 </body>
 </html>
-/* =========================
-   PLAYER MOVEMENT & PHYSICS
-========================= */
-const GRAVITY = -0.02;
-const PLAYER_HEIGHT = 1.8;
-
-function getBlockBelowPlayer() {
-  // find highest block directly under player
-  let maxY = -Infinity;
-  blocks.forEach(b => {
-    if (
-      player.pos.x + 0.5 > b.position.x &&
-      player.pos.x - 0.5 < b.position.x + 1 &&
-      player.pos.z + 0.5 > b.position.z &&
-      player.pos.z - 0.5 < b.position.z + 1
-    ) {
-      if (b.position.y > maxY) maxY = b.position.y;
-    }
-  });
-  return maxY;
-}
-
-function updatePlayer() {
-  // Horizontal movement
-  if(keys["KeyW"]||keys["ArrowUp"])    player.pos.z -= player.speed;
-  if(keys["KeyS"]||keys["ArrowDown"])  player.pos.z += player.speed;
-  if(keys["KeyA"]||keys["ArrowLeft"])  player.pos.x -= player.speed;
-  if(keys["KeyD"]||keys["ArrowRight"]) player.pos.x += player.speed;
-
-  // Gravity
-  player.vel.y += GRAVITY;
-  player.pos.y += player.vel.y;
-
-  // Collision with ground blocks
-  const groundY = getBlockBelowPlayer() + 1; // standing on top
-  if(player.pos.y < groundY) {
-    player.pos.y = groundY;
-    player.vel.y = 0;
-    player.jumping = false;
-  }
-
-  // Jump
-  if(keys["Space"] && !player.jumping){
-    player.vel.y = 0.25; // jump strength
-    player.jumping = true;
-  }
-
-  // Camera follow
-  camera.position.lerp(
-    new THREE.Vector3(
-      player.pos.x,
-      player.pos.y + 6,
-      player.pos.z + 10
-    ), 0.1
-  );
-  camera.lookAt(player.pos);
-}
 
