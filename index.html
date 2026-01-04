@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Voxel World – Foundation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: Arial;
+      background: rgba(0,0,0,0.4);
+      padding: 10px;
+      border-radius: 6px;
+      z-index: 10;
+    }
+  </style>
+</head>
+
+<body>
+<div id="ui">
+  🧱 Voxel World (Foundation)<br>
+  Move: WASD / Arrows<br>
+  Jump: Space<br>
+  Click: Break | Right Click: Place
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+<script>
+/* =========================
+   BASIC ENGINE SETUP
+========================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+const camera = new THREE.PerspectiveCamera(
+  75, window.innerWidth / window.innerHeight, 0.1, 1000
+);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/* =========================
+   LIGHTING
+========================= */
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xffffff, 1);
+sun.position.set(50, 100, 50);
+scene.add(sun);
+
+/* =========================
+   PLAYER
+========================= */
+const player = {
+  pos: new THREE.Vector3(8, 10, 8),
+  vel: new THREE.Vector3(),
+  speed: 0.15,
+  jumping: false
+};
+
+/* =========================
+   CAMERA
+========================= */
+camera.position.set(8, 14, 18);
+
+/* =========================
+   BLOCK SYSTEM
+========================= */
+const BLOCK_SIZE = 1;
+const blocks = [];
+
+const geo = new THREE.BoxGeometry(1,1,1);
+const materials = {
+  grass: new THREE.MeshStandardMaterial({ color: 0x55aa55 }),
+  dirt:  new THREE.MeshStandardMaterial({ color: 0x8b5a2b }),
+  stone: new THREE.MeshStandardMaterial({ color: 0x888888 })
+};
+
+/* =========================
+   SIMPLE NOISE (terrain)
+========================= */
+function heightNoise(x, z) {
+  return Math.floor(
+    Math.sin(x * 0.3) * 2 +
+    Math.cos(z * 0.3) * 2 + 4
+  );
+}
+
+/* =========================
+   GENERATE WORLD (CHUNK)
+========================= */
+const WORLD_SIZE = 16;
+
+for (let x = 0; x < WORLD_SIZE; x++) {
+  for (let z = 0; z < WORLD_SIZE; z++) {
+
+    const height = heightNoise(x, z);
+
+    for (let y = 0; y <= height; y++) {
+      let mat = materials.stone;
+      if (y === height) mat = materials.grass;
+      else if (y > height - 2) mat = materials.dirt;
+
+      const block = new THREE.Mesh(geo, mat);
+      block.position.set(x, y, z);
+      scene.add(block);
+      blocks.push(block);
+    }
+  }
+}
+
+/* =========================
+   CONTROLS
+========================= */
+const keys = {};
+document.addEventListener("keydown", e => keys[e.code] = true);
+document.addEventListener("keyup", e => keys[e.code] = false);
+
+/* =========================
+   RAYCAST (BREAK / PLACE)
+========================= */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+function castRay(event) {
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  return raycaster.intersectObjects(blocks);
+}
+
+/* BREAK */
+window.addEventListener("click", e => {
+  const hit = castRay(e);
+  if (hit.length) {
+    const b = hit[0].object;
+    scene.remove(b);
+    blocks.splice(blocks.indexOf(b), 1);
+  }
+});
+
+/* PLACE */
+window.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  const hit = castRay(e);
+  if (hit.length) {
+    const b = new THREE.Mesh(geo, materials.dirt);
+    b.position.copy(hit[0].object.position)
+      .add(hit[0].face.normal);
+    scene.add(b);
+    blocks.push(b);
+  }
+});
+
+/* =========================
+   GAME LOOP
+========================= */
+function animate() {
+  requestAnimationFrame(animate);
+
+  /* Movement */
+  if (keys["KeyW"] || keys["ArrowUp"])    player.pos.z -= player.speed;
+  if (keys["KeyS"] || keys["ArrowDown"])  player.pos.z += player.speed;
+  if (keys["KeyA"] || keys["ArrowLeft"])  player.pos.x -= player.speed;
+  if (keys["KeyD"] || keys["ArrowRight"]) player.pos.x += player.speed;
+
+  /* Jump */
+  if (keys["Space"] && !player.jumping) {
+    player.vel.y = 0.25;
+    player.jumping = true;
+  }
+
+  /* Gravity */
+  player.vel.y -= 0.01;
+  player.pos.add(player.vel);
+
+  if (player.pos.y <= 6) {
+    player.pos.y = 6;
+    player.vel.y = 0;
+    player.jumping = false;
+  }
+
+  /* Camera follow */
+  camera.position.lerp(
+    new THREE.Vector3(
+      player.pos.x,
+      player.pos.y + 6,
+      player.pos.z + 10
+    ), 0.1
+  );
+  camera.lookAt(player.pos);
+
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>
