@@ -201,3 +201,60 @@ animate();
 </script>
 </body>
 </html>
+/* =========================
+   PLAYER MOVEMENT & PHYSICS
+========================= */
+const GRAVITY = -0.02;
+const PLAYER_HEIGHT = 1.8;
+
+function getBlockBelowPlayer() {
+  // find highest block directly under player
+  let maxY = -Infinity;
+  blocks.forEach(b => {
+    if (
+      player.pos.x + 0.5 > b.position.x &&
+      player.pos.x - 0.5 < b.position.x + 1 &&
+      player.pos.z + 0.5 > b.position.z &&
+      player.pos.z - 0.5 < b.position.z + 1
+    ) {
+      if (b.position.y > maxY) maxY = b.position.y;
+    }
+  });
+  return maxY;
+}
+
+function updatePlayer() {
+  // Horizontal movement
+  if(keys["KeyW"]||keys["ArrowUp"])    player.pos.z -= player.speed;
+  if(keys["KeyS"]||keys["ArrowDown"])  player.pos.z += player.speed;
+  if(keys["KeyA"]||keys["ArrowLeft"])  player.pos.x -= player.speed;
+  if(keys["KeyD"]||keys["ArrowRight"]) player.pos.x += player.speed;
+
+  // Gravity
+  player.vel.y += GRAVITY;
+  player.pos.y += player.vel.y;
+
+  // Collision with ground blocks
+  const groundY = getBlockBelowPlayer() + 1; // standing on top
+  if(player.pos.y < groundY) {
+    player.pos.y = groundY;
+    player.vel.y = 0;
+    player.jumping = false;
+  }
+
+  // Jump
+  if(keys["Space"] && !player.jumping){
+    player.vel.y = 0.25; // jump strength
+    player.jumping = true;
+  }
+
+  // Camera follow
+  camera.position.lerp(
+    new THREE.Vector3(
+      player.pos.x,
+      player.pos.y + 6,
+      player.pos.z + 10
+    ), 0.1
+  );
+  camera.lookAt(player.pos);
+}
