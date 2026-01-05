@@ -1,290 +1,353 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Voxel Survival Prototype - Phase 4</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>
-    body { margin:0; overflow:hidden; background:#87ceeb; }
-    #ui {
-      position:absolute; top:10px; left:10px; color:white;
-      font-family:Arial; background:rgba(0,0,0,0.4);
-      padding:10px; border-radius:6px; z-index:10;
-    }
-  </style>
-</head>
-<body>
-<div id="ui">
-  🧱 Voxel Survival Prototype Phase 4<br>
-  Move: WASD / Arrows | Jump: Space<br>
-  Click: Break | Right Click: Place | Mouse Look
-</div>
+# Voxel Sandbox Single-File Script (Godot 4)
+# Attach to a Node3D as the main scene root and press Play.
+# Requires: res://voxel_atlas.png (16x16 tile atlas)
 
-<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
-<script>
-/* =========================
-   BASIC SETUP
-========================= */
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb);
+extends Node3D
 
-const camera = new THREE.PerspectiveCamera(
-  75, window.innerWidth/window.innerHeight, 0.1, 1000
-);
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
+# ---------------------------------------------------------
+# Input setup (adds actions at runtime)
+# ---------------------------------------------------------
+func _setup_input():
+    if not InputMap.has_action("move_forward"):
+        InputMap.add_action("move_forward")
+        InputMap.action_add_event("move_forward", InputEventKey.new_from_physical_key(PhysicalKey.KEY_W))
+    if not InputMap.has_action("move_back"):
+        InputMap.add_action("move_back")
+        InputMap.action_add_event("move_back", InputEventKey.new_from_physical_key(PhysicalKey.KEY_S))
+    if not InputMap.has_action("move_left"):
+        InputMap.add_action("move_left")
+        InputMap.action_add_event("move_left", InputEventKey.new_from_physical_key(PhysicalKey.KEY_A))
+    if not InputMap.has_action("move_right"):
+        InputMap.add_action("move_right")
+        InputMap.action_add_event("move_right", InputEventKey.new_from_physical_key(PhysicalKey.KEY_D))
+    if not InputMap.has_action("jump"):
+        InputMap.add_action("jump")
+        InputMap.action_add_event("jump", InputEventKey.new_from_physical_key(PhysicalKey.KEY_SPACE))
 
-/* =========================
-   LIGHTING
-========================= */
-scene.add(new THREE.AmbientLight(0xffffff,0.5));
-const sun = new THREE.DirectionalLight(0xffffff,1);
-sun.position.set(50,100,50);
-scene.add(sun);
+# ---------------------------------------------------------
+# Voxel types
+# ---------------------------------------------------------
+class VoxelTypes:
+    enum Id { AIR = 0, GRASS = 1, DIRT = 2, STONE = 3 }
 
-/* =========================
-   BLOCKS & MATERIALS
-========================= */
-const BLOCK_SIZE = 1;
-const geo = new THREE.BoxGeometry(1,1,1);
-const materials = {
-  grass: new THREE.MeshStandardMaterial({color:0x55aa55}),
-  dirt:  new THREE.MeshStandardMaterial({color:0x8b5a2b}),
-  stone: new THREE.MeshStandardMaterial({color:0x888888}),
-  wood:  new THREE.MeshStandardMaterial({color:0x8b4513}),
-  leaves:new THREE.MeshStandardMaterial({color:0x228b22})
-};
+    static func is_solid(id: int) -> bool:
+        return id != Id.AIR
 
-/* =========================
-   PLAYER
-========================= */
-const player = {
-  pos:new THREE.Vector3(8,10,8),
-  vel:new THREE.Vector3(),
-  speed:0.15,
-  jumping:false,
-  yaw:0,   // horizontal rotation
-  pitch:0  // vertical rotation
-};
+# ---------------------------------------------------------
+# Chunk node: data + face-culling mesher
+# ---------------------------------------------------------
+class Chunk:
+    extends Node3D
 
-/* =========================
-   CAMERA
-========================= */
-camera.position.set(8,14,18);
+    const SIZE_X := 16
+    const SIZE_Y := 128
+    const SIZE_Z := 16
 
-/* =========================
-   CONTROLS
-========================= */
-const keys = {};
-document.addEventListener("keydown", e=>keys[e.code]=true);
-document.addEventListener("keyup", e=>keys[e.code]=false);
+    var voxels: PackedInt32Array
+    var mesh_instance: MeshInstance3D
+    var material: StandardMaterial3D
+    var atlas_tiles := 16 # 16x16 tile atlas
+    var atlas_tex: Texture2D
 
-// Mouse look
-let isPointerLocked = false;
-document.body.addEventListener("click", ()=>document.body.requestPointerLock());
-document.addEventListener("pointerlockchange",()=>{isPointerLocked=document.pointerLockElement===document.body;});
+    func _ready():
+        voxels = PackedInt32Array()
+        voxels.resize(SIZE_X * SIZE_Y * SIZE_Z)
+        mesh_instance = MeshInstance3D.new()
+        add_child(mesh_instance)
 
-document.addEventListener("mousemove", e=>{
-  if(!isPointerLocked) return;
-  const sensitivity = 0.002;
-  player.yaw -= e.movementX * sensitivity;
-  player.pitch -= e.movementY * sensitivity;
-  player.pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, player.pitch));
-});
+        # Material setup
+        atlas_tex = load("res://voxel_atlas.png")
+        material = StandardMaterial3D.new()
+        material.albedo_texture = atlas_tex
+        material.roughness = 0.9
+        material.metallic = 0.0
+        material.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+        mesh_instance.material_override = material
 
-/* =========================
-   NOISE FUNCTIONS
-========================= */
-function noise(x,z){ return Math.floor(Math.sin(x*0.3)*2 + Math.cos(z*0.3)*2 +4); }
-function noise3D(x,y,z){ return Math.sin(x*0.2)*Math.cos(y*0.2)*Math.sin(z*0.2); }
-function riverNoise(x,z){ return Math.sin(x*0.05)+Math.cos(z*0.05); }
+    func _index(x:int,y:int,z:int) -> int:
+        return x + y * SIZE_X + z * SIZE_X * SIZE_Y
 
-/* =========================
-   CHUNK SYSTEM
-========================= */
-const CHUNK_SIZE = 16;
-const VIEW_DISTANCE = 2;
-let chunks = {};
-let blocks = [];
+    func set_voxel(x:int,y:int,z:int,id:int) -> void:
+        if x<0 or x>=SIZE_X or y<0 or y>=SIZE_Y or z<0 or z>=SIZE_Z: return
+        voxels[_index(x,y,z)] = id
 
-function generateChunk(cx, cz){
-  const chunkBlocks = [];
-  for(let x=0;x<CHUNK_SIZE;x++){
-    for(let z=0;z<CHUNK_SIZE;z++){
-      const worldX = cx*CHUNK_SIZE + x;
-      const worldZ = cz*CHUNK_SIZE + z;
+    func get_voxel(x:int,y:int,z:int) -> int:
+        if x<0 or x>=SIZE_X or y<0 or y>=SIZE_Y or z<0 or z>=SIZE_Z:
+            return VoxelTypes.Id.AIR
+        return voxels[_index(x,y,z)]
 
-      const height = noise(worldX, worldZ);
+    func _tile_uv(tile_x:int, tile_y:int) -> Array:
+        var ts := 1.0 / float(atlas_tiles)
+        var x0 := float(tile_x) * ts
+        var y0 := float(tile_y) * ts
+        var x1 := x0 + ts
+        var y1 := y0 + ts
+        return [Vector2(x0,y0), Vector2(x1,y0), Vector2(x1,y1), Vector2(x0,y1)]
 
-      // river carving
-      const river = riverNoise(worldX, worldZ);
-      let riverDepth = 0;
-      if(river>0.9 && river<1.1) riverDepth=2;
+    func _uv_for(id:int, face:int) -> Array:
+        # face indices: 0:-X, 1:+X, 2:-Y, 3:+Y, 4:-Z, 5:+Z
+        match id:
+            VoxelTypes.Id.GRASS:
+                if face == 3: # top
+                    return _tile_uv(1,1)
+                elif face == 2: # bottom
+                    return _tile_uv(3,1)
+                else: # sides
+                    return _tile_uv(2,1)
+            VoxelTypes.Id.DIRT:
+                return _tile_uv(3,1)
+            VoxelTypes.Id.STONE:
+                return _tile_uv(4,1)
+            _:
+                return _tile_uv(0,0)
 
-      // generate terrain blocks
-      for(let y=0;y<=height;y++){
-        // caves
-        const cave = noise3D(worldX,y,worldZ);
-        if(cave>0.5) continue;
-        // river
-        if(y <= height && y>height-riverDepth) continue;
+    func rebuild_mesh():
+        var arrays := []
+        var verts: PackedVector3Array = PackedVector3Array()
+        var uvs: PackedVector2Array = PackedVector2Array()
+        var indices: PackedInt32Array = PackedInt32Array()
 
-        let mat = materials.stone;
-        if(y===height) mat=materials.grass;
-        else if(y>height-2) mat=materials.dirt;
+        func add_face(a:Vector3,b:Vector3,c:Vector3,d:Vector3, uv4:Array):
+            var base := verts.size()
+            verts.append_array([a,b,c,d])
+            uvs.append_array([uv4[0], uv4[1], uv4[2], uv4[3]])
+            indices.append_array([base, base+2, base+1, base, base+3, base+2])
 
-        const block = new THREE.Mesh(geo, mat);
-        block.position.set(worldX,y,worldZ);
-        scene.add(block);
-        chunkBlocks.push(block);
-        blocks.push(block);
-      }
+        for x in SIZE_X:
+            for y in SIZE_Y:
+                for z in SIZE_Z:
+                    var id := get_voxel(x,y,z)
+                    if not VoxelTypes.is_solid(id): continue
+                    var p := Vector3(x,y,z)
 
-      // Tree generation
-      if(Math.random()<0.05){ // 5% chance per x,z column
-        const trunkHeight = 4 + Math.floor(Math.random()*2);
-        for(let ty=height+1; ty<=height+trunkHeight; ty++){
-          const wood = new THREE.Mesh(geo, materials.wood);
-          wood.position.set(worldX,ty,worldZ);
-          scene.add(wood);
-          chunkBlocks.push(wood);
-          blocks.push(wood);
-        }
-        const leafStart = height + trunkHeight - 1;
-        for(let lx=-1; lx<=1; lx++){
-          for(let lz=-1; lz<=1; lz++){
-            for(let ly=0; ly<=1; ly++){
-              const leaf = new THREE.Mesh(geo, materials.leaves);
-              leaf.position.set(worldX+lx, leafStart+ly, worldZ+lz);
-              scene.add(leaf);
-              chunkBlocks.push(leaf);
-              blocks.push(leaf);
-            }
-          }
-        }
-      }
-    }
-  }
-  return chunkBlocks;
-}
+                    # -X
+                    if not VoxelTypes.is_solid(get_voxel(x-1,y,z)):
+                        add_face(p+Vector3(0,0,0), p+Vector3(0,0,1), p+Vector3(0,1,1), p+Vector3(0,1,0), _uv_for(id, 0))
+                    # +X
+                    if not VoxelTypes.is_solid(get_voxel(x+1,y,z)):
+                        add_face(p+Vector3(1,0,1), p+Vector3(1,0,0), p+Vector3(1,1,0), p+Vector3(1,1,1), _uv_for(id, 1))
+                    # -Y (bottom)
+                    if not VoxelTypes.is_solid(get_voxel(x,y-1,z)):
+                        add_face(p+Vector3(0,0,1), p+Vector3(0,0,0), p+Vector3(1,0,0), p+Vector3(1,0,1), _uv_for(id, 2))
+                    # +Y (top)
+                    if not VoxelTypes.is_solid(get_voxel(x,y+1,z)):
+                        add_face(p+Vector3(0,1,0), p+Vector3(0,1,1), p+Vector3(1,1,1), p+Vector3(1,1,0), _uv_for(id, 3))
+                    # -Z
+                    if not VoxelTypes.is_solid(get_voxel(x,y,z-1)):
+                        add_face(p+Vector3(1,0,0), p+Vector3(0,0,0), p+Vector3(0,1,0), p+Vector3(1,1,0), _uv_for(id, 4))
+                    # +Z
+                    if not VoxelTypes.is_solid(get_voxel(x,y,z+1)):
+                        add_face(p+Vector3(0,0,1), p+Vector3(1,0,1), p+Vector3(1,1,1), p+Vector3(0,1,1), _uv_for(id, 5))
 
-function updateChunks(){
-  const playerChunkX = Math.floor(player.pos.x / CHUNK_SIZE);
-  const playerChunkZ = Math.floor(player.pos.z / CHUNK_SIZE);
+        arrays.resize(Mesh.ARRAY_MAX)
+        arrays[Mesh.ARRAY_VERTEX] = verts
+        arrays[Mesh.ARRAY_TEX_UV] = uvs
+        arrays[Mesh.ARRAY_INDEX] = indices
 
-  for(let dx=-VIEW_DISTANCE;dx<=VIEW_DISTANCE;dx++){
-    for(let dz=-VIEW_DISTANCE;dz<=VIEW_DISTANCE;dz++){
-      const key = (playerChunkX+dx)+","+(playerChunkZ+dz);
-      if(!chunks[key]){
-        chunks[key] = generateChunk(playerChunkX+dx, playerChunkZ+dz);
-      }
-    }
-  }
-}
+        var mesh := ArrayMesh.new()
+        if verts.size() > 0:
+            mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+            mesh_instance.mesh = mesh
+        else:
+            mesh_instance.mesh = null
 
-/* =========================
-   PLAYER PHYSICS
-========================= */
-const GRAVITY=-0.02;
+# ---------------------------------------------------------
+# World node: chunk streaming and terrain generation
+# ---------------------------------------------------------
+class World:
+    extends Node3D
 
-function getBlockBelowPlayer(){
-  let maxY=-Infinity;
-  blocks.forEach(b=>{
-    if(player.pos.x+0.5 > b.position.x && player.pos.x-0.5 < b.position.x+1 &&
-       player.pos.z+0.5 > b.position.z && player.pos.z-0.5 < b.position.z+1){
-      if(b.position.y>maxY) maxY=b.position.y;
-    }
-  });
-  return maxY;
-}
+    @export var radius_chunks := 6
+    var chunks := {}
+    var player_ref: Node3D
 
-function updatePlayer(){
-  // movement
-  let forward = new THREE.Vector3(Math.sin(player.yaw),0,Math.cos(player.yaw));
-  let right = new THREE.Vector3(Math.sin(player.yaw+Math.PI/2),0,Math.cos(player.yaw+Math.PI/2));
+    func _ready():
+        # ambient light and sun
+        var sun := DirectionalLight3D.new()
+        sun.light_energy = 1.0
+        sun.rotation_degrees = Vector3(30, 30, 0)
+        add_child(sun)
+        _ensure_chunks_around(Vector3.ZERO)
 
-  if(keys["KeyW"]||keys["ArrowUp"]) player.pos.add(forward.clone().multiplyScalar(player.speed));
-  if(keys["KeyS"]||keys["ArrowDown"]) player.pos.add(forward.clone().multiplyScalar(-player.speed));
-  if(keys["KeyA"]||keys["ArrowLeft"]) player.pos.add(right.clone().multiplyScalar(-player.speed));
-  if(keys["KeyD"]||keys["ArrowRight"]) player.pos.add(right.clone().multiplyScalar(player.speed));
+    func set_player(node: Node3D):
+        player_ref = node
 
-  // gravity
-  player.vel.y += GRAVITY;
-  player.pos.y += player.vel.y;
+    func _process(_dt):
+        if player_ref:
+            _ensure_chunks_around(player_ref.global_transform.origin)
 
-  const groundY = getBlockBelowPlayer() + 1;
-  if(player.pos.y < groundY){
-    player.pos.y = groundY;
-    player.vel.y = 0;
-    player.jumping = false;
-  }
+    func _chunk_key(cx:int, cz:int) -> String:
+        return "%s_%s" % [cx, cz]
 
-  // jump
-  if(keys["Space"] && !player.jumping){
-    player.vel.y = 0.25;
-    player.jumping = true;
-  }
+    func _ensure_chunks_around(pos:Vector3):
+        var cx := int(floor(pos.x / Chunk.SIZE_X))
+        var cz := int(floor(pos.z / Chunk.SIZE_Z))
+        for dx in range(-radius_chunks, radius_chunks+1):
+            for dz in range(-radius_chunks, radius_chunks+1):
+                var key := _chunk_key(cx+dx, cz+dz)
+                if chunks.has(key): continue
+                var chunk := Chunk.new()
+                chunk.position = Vector3((cx+dx)*Chunk.SIZE_X, 0, (cz+dz)*Chunk.SIZE_Z)
+                add_child(chunk)
+                _generate_terrain(chunk, cx+dx, cz+dz)
+                chunk.rebuild_mesh()
+                chunks[key] = chunk
+        # Optional: unload distant chunks
 
-  // camera follows mouse
-  const camX = player.pos.x + Math.sin(player.yaw)*10;
-  const camY = player.pos.y + 6 + Math.sin(player.pitch)*2;
-  const camZ = player.pos.z + Math.cos(player.yaw)*10;
-  camera.position.lerp(new THREE.Vector3(camX, camY, camZ),0.1);
-  const lookPoint = new THREE.Vector3(
-    player.pos.x + Math.sin(player.yaw),
-    player.pos.y + Math.sin(player.pitch),
-    player.pos.z + Math.cos(player.yaw)
-  );
-  camera.lookAt(lookPoint);
+    func _height_at(wx:int, wz:int) -> int:
+        # Simple layered noise; replace with FastNoiseLite for better results
+        var n := (sin(float(wx)*0.05) + cos(float(wz)*0.05)) * 0.5
+        n += (sin(float(wx)*0.01) * cos(float(wz)*0.01)) * 0.5
+        return int(clamp(32 + n * 16, 4, Chunk.SIZE_Y - 2))
 
-  updateChunks();
-}
+    func _generate_terrain(chunk:Chunk, ccx:int, ccz:int):
+        for x in Chunk.SIZE_X:
+            for z in Chunk.SIZE_Z:
+                var wx := ccx * Chunk.SIZE_X + x
+                var wz := ccz * Chunk.SIZE_Z + z
+                var h := _height_at(wx, wz)
+                for y in range(0, h+1):
+                    var id := VoxelTypes.Id.GRASS if y == h else (VoxelTypes.Id.DIRT if y > h - 4 else VoxelTypes.Id.STONE)
+                    chunk.set_voxel(x,y,z,id)
 
-/* =========================
-   RAYCAST (BREAK/PLACE)
-========================= */
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
+    func chunk_at_world(wx:int, wz:int) -> Chunk:
+        var cx := int(floor(float(wx)/Chunk.SIZE_X))
+        var cz := int(floor(float(wz)/Chunk.SIZE_Z))
+        var key := _chunk_key(cx, cz)
+        return chunks.get(key, null)
 
-function castRay(event){
-  mouse.x = (event.clientX/window.innerWidth)*2-1;
-  mouse.y = -(event.clientY/window.innerHeight)*2+1;
-  raycaster.setFromCamera(mouse,camera);
-  return raycaster.intersectObjects(blocks);
-}
+# ---------------------------------------------------------
+# Player controller: movement and mouse look
+# ---------------------------------------------------------
+class Player:
+    extends CharacterBody3D
 
-// break
-window.addEventListener("click",e=>{
-  const hit=castRay(e);
-  if(hit.length){
-    const b=hit[0].object;
-    scene.remove(b);
-    blocks.splice(blocks.indexOf(b),1);
-  }
-});
+    @export var speed := 6.0
+    @export var jump_force := 7.0
+    @export var gravity := 20.0
 
-// place
-window.addEventListener("contextmenu",e=>{
-  e.preventDefault();
-  const hit=castRay(e);
-  if(hit.length){
-    const b=new THREE.Mesh(geo,materials.dirt);
-    b.position.copy(hit[0].object.position).add(hit[0].face.normal);
-    scene.add(b);
-    blocks.push(b);
-  }
-});
+    var camera: Camera3D
 
-/* =========================
-   GAME LOOP
-========================= */
-function animate(){
-  requestAnimationFrame(animate);
-  updatePlayer();
-  renderer.render(scene,camera);
-}
-animate();
-</script>
-</body>
-</html>
+    func _ready():
+        camera = Camera3D.new()
+        camera.position = Vector3(0, 1.6, 0)
+        add_child(camera)
+        Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
+    func _physics_process(dt):
+        var dir := Vector3.ZERO
+        var basis := global_transform.basis
+        if Input.is_action_pressed("move_forward"): dir -= basis.z
+        if Input.is_action_pressed("move_back"):    dir += basis.z
+        if Input.is_action_pressed("move_left"):    dir -= basis.x
+        if Input.is_action_pressed("move_right"):   dir += basis.x
+        dir.y = 0
+        dir = dir.normalized() * speed
+
+        velocity.x = dir.x
+        velocity.z = dir.z
+
+        if is_on_floor():
+            if Input.is_action_just_pressed("jump"):
+                velocity.y = jump_force
+        velocity.y -= gravity * dt
+        move_and_slide()
+
+    func _input(event):
+        if event is InputEventMouseMotion:
+            rotate_y(deg_to_rad(-event.relative.x * 0.15))
+            camera.rotate_x(deg_to_rad(-event.relative.y * 0.15))
+            camera.rotation.x = clamp(camera.rotation.x, deg_to_rad(-80), deg_to_rad(80))
+
+# ---------------------------------------------------------
+# Tool: block place/remove via raycast
+# ---------------------------------------------------------
+class Tool:
+    extends Node
+
+    var world: World
+    var camera: Camera3D
+
+    func _unhandled_input(event):
+        if event is InputEventMouseButton and event.pressed and camera and world:
+            var mouse_dir := -camera.global_transform.basis.z
+            var from := camera.global_transform.origin
+            var to := from + mouse_dir * 6.0
+            var space_state := get_world_3d().direct_space_state
+            var params := PhysicsRayQueryParameters3D.create(from, to)
+            var hit := space_state.intersect_ray(params)
+            if hit:
+                var pos := hit.position - hit.normal * 0.01
+                var bx := int(floor(pos.x))
+                var by := int(floor(pos.y))
+                var bz := int(floor(pos.z))
+                if event.button_index == MOUSE_BUTTON_LEFT:
+                    _remove_block(bx, by, bz)
+                elif event.button_index == MOUSE_BUTTON_RIGHT:
+                    var nx := bx + int(round(hit.normal.x))
+                    var ny := by + int(round(hit.normal.y))
+                    var nz := bz + int(round(hit.normal.z))
+                    _place_block(nx, ny, nz, VoxelTypes.Id.DIRT)
+
+    func _remove_block(x:int,y:int,z:int):
+        var chunk := world.chunk_at_world(x, z)
+        if not chunk: return
+        var lx := posmod(x, Chunk.SIZE_X)
+        var lz := posmod(z, Chunk.SIZE_Z)
+        chunk.set_voxel(lx,y,lz,VoxelTypes.Id.AIR)
+        chunk.rebuild_mesh()
+
+    func _place_block(x:int,y:int,z:int,id:int):
+        var chunk := world.chunk_at_world(x, z)
+        if not chunk: return
+        var lx := posmod(x, Chunk.SIZE_X)
+        var lz := posmod(z, Chunk.SIZE_Z)
+        chunk.set_voxel(lx,y,lz,id)
+        chunk.rebuild_mesh()
+
+# ---------------------------------------------------------
+# Main scene bootstrap
+# ---------------------------------------------------------
+var world_node: World
+var player_node: Player
+var tool_node: Tool
+
+func _ready():
+    _setup_input()
+
+    # Create world
+    world_node = World.new()
+    add_child(world_node)
+
+    # Create player
+    player_node = Player.new()
+    player_node.position = Vector3(8, 40, 8)
+    add_child(player_node)
+    world_node.set_player(player_node)
+
+    # Ground hint (optional visual plane)
+    var ground := MeshInstance3D.new()
+    ground.mesh = PlaneMesh.new()
+    ground.mesh.size = Vector2(16,16)
+    ground.rotation_degrees = Vector3(-90, 0, 0)
+    ground.position = Vector3(8, 0, 8)
+    var ground_mat := StandardMaterial3D.new()
+    ground_mat.albedo_color = Color(0.5,0.8,0.4)
+    ground.material_override = ground_mat
+    add_child(ground)
+
+    # Tool
+    tool_node = Tool.new()
+    tool_node.world = world_node
+    tool_node.camera = player_node.camera
+    add_child(tool_node)
+
+    # Environment lighting
+    var env := WorldEnvironment.new()
+    var env_res := Environment.new()
+    env_res.background_mode = Environment.BG_SKY
+    env.environment = env_res
+    add_child(env)
+
+func _exit_tree():
+    Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
